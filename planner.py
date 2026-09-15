@@ -18,6 +18,15 @@ def _is_blocked(cell, infla_map):
         return True
     return False
 
+def is_path_blocked(path, infla_map):
+    if not path:
+        return False
+    for pt in path:
+        cell = (int(pt[0]), int(pt[1]))
+        if infla_map.get(cell, 0) > 0:
+            return True
+    return False
+
 def _nearest_free(infla_map, col, row, radius=15):
     for r in range(radius):
         for dc in range(-r, r+1):
@@ -66,17 +75,13 @@ def _smooth(path, infla_map):
 
 class Plan():
     def __init__(self, infla_map):
+        self.REPLAN_TIMEOUT = 1.5 #seconds
+        self.MIN_REPLAN_INTERVAL = 0.5 #seconds
         self.infla_map = infla_map
         self._tick = 0
 
     def astar(self, start, goal):
         fallback_path = [start, start]
-
-        if _is_blocked(goal, self.infla_map):
-            goal = _nearest_free(self.infla_map, goal[0], goal[1])
-            if goal is None:
-                print("[A* WARNING] 目標點位於障礙區，且周圍搜尋範圍內無安全空地！")
-                return fallback_path # 找不到替代點，安全返回原地
 
         if _is_blocked(start, self.infla_map):
             print("[A* WARNING] 小車目前處於膨脹危險區內，規劃停止以策安全！")
