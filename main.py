@@ -27,7 +27,7 @@ CENTER_X = WINDOW_WIDTH // 2
 CENTER_Y = WINDOW_HEIGHT // 2
 GRID_SIZE = 4
 
-state = (car_theta, car_x, car_y, goal_x, goal_y, path_cells)
+#state = (car_theta, car_x, car_y, goal_x, goal_y, path_cells)
 
 screen_size = (WINDOW_WIDTH, WINDOW_HEIGHT, CENTER_X, CENTER_Y, GRID_SIZE)
 
@@ -35,7 +35,7 @@ SENSOR_OFFSET = 11.5 #cm
 infla_radius = 6  
 
 # color
-COLOR_CROSSHAIR = (0, 150, 255, 100) # 準星藍色 (帶有一點透明度)
+COLOR_CROSSHAIR = (0, 150, 255, 100) 
 
 screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
 pygame.display.set_caption("Pygame 4-Quadrant Gridmap (Float Coordinates)")
@@ -55,13 +55,15 @@ planner = Plan(COSTMAP.infla_layer.infla_map)
 goal_x, goal_y = 0, 0
 path_cells = []      
 
+need_replan = False
+has_goal = False
 try:
     ser = serial.Serial(COM_PORT, BAUD_RATE, timeout=1)
     print(f"成功連結 {COM_PORT}")
     running = True
     time.sleep(2) 
 
-    last_send_time = time.time()
+    last_plan_time = time.time()
     while running:
         map_changed = False
     
@@ -77,6 +79,7 @@ try:
                     mx, my = pygame.mouse.get_pos()
                     goal_x, goal_y = caculation.pixel_to_world(CENTER_X, CENTER_Y, mx, my, GRID_SIZE)
                     map_changed = True
+                    has_goal = True
 
         tt_obs_points = [] 
         while ser.in_waiting > 0:
@@ -114,39 +117,65 @@ try:
 
                     if len(obstacle_history) > 500:
                         obstacle_history.pop(0)
+
+                map_updated = True
             except UnicodeDecodeError:
                 pass
 
         current_time = time.time()
-        if current_time - last_send_time > 0.05:
+        if map_updated and path_cells:
+            if current_time - last_plan_time > planner.MIN_REPLAN_INTERVAL:
+                if planner.is_path_blocked(path_cells, COSTMAP.infla_layer.infla_map):
+                    need_replan = True
+
+        if current_time - last_plan_time > planner.REPLAN_TIMEOUT:
+            need_replan = True
+
+        if has_goal :
+            d_to_final_goal = math.hypot(goal_x - car_x, goal_y - car_y)
+            if d_to_final_goal < 10:
+                has_goal = False
+                need_replan = False
+                path_cells = []
+                send_string = f"{0},{0}\n"
+                ser.write(send_string.encode('utf-8'))
+                print("已到達目標點，停止小車。")
+
+        if has_goal and need_replan:
             start_tuple = (int(car_x), int(car_y))
             goal_tuple = (int(goal_x), int(goal_y))
-            path_cells = planner.astar(start_tuple, goal_tuple)
+            new_path = planner.astar(start_tuple, goal_tuple)
+
+            if new_path and len(new_path) > 1:
+                path_cells = new_path
+
+            need_replan = False
+            last_plan_time = current_time
             #print(path_cells)
-            prev_map_state = True
 
             if path_cells and len(path_cells) > 1:
                 next_target = path_cells[1] 
-                goal_x = int(next_target[0])
-                goal_y = int(next_target[1])
-                errordistance, errorAngle = caculation.error_calculation(car_x, car_y, car_theta, goal_x, goal_y)
+                target_x = int(next_target[0])
+                target_y = int(next_target[1])
 
+                errordistance, errorAngle = caculation.error_calculation(car_x, car_y, car_theta, target_x, target_y)
+                #RPM calculation
                 if abs(errordistance) > 0.02:
-                    target_v = 1.7 * errordistance
-                    target_v = max(0, min(target_v, 0.24))  
-                    base_linear_RPM = (target_v / wheel_perimeter) * 60.0
-                    linear_RPM = base_linear_RPM * linear_factor
+                    if abs(errorAngle) > 2:
+                        linear_factor = 1.0 - pow((min(abs(errorAngle), 180.0) / 180.0),2)
+                        target_v = 1.7 * errordistance
+                        target_v = max(0, min(target_v, 0.24))  
+                        base_linear_RPM = (target_v / wheel_perimeter) * 60.0
+                        linear_RPM = base_linear_RPM * linear_factor
+                        target_w = 4.3*errorAngle
+                        target_w = max(-90, min(target_w, 90))
+                        rotate_RPM = target_w * wheel_base / (wheel_radius * 12)
+                    else:
+                        target_w = 0
+                        linear_RPM = base_linear_RPM
                 else:
-                    target_v = 0
                     linear_RPM = 0
-                if abs(errorAngle) > 2.0:
-                    target_w = 4.3*errorAngle
-                    target_w = max(-90, min(target_w, 90))
-                    linear_factor = 1.0 - pow((min(abs(errorAngle), 180.0) / 180.0),2)
-                    rotate_RPM = target_w * wheel_base / (wheel_radius * 12)
-                else:
-                    target_w = 0
-                    rotate_RPM = 0
+                    rotate_RPM = 0  
 
                 print(f"{int(linear_RPM)},{int(rotate_RPM)}\n")
                 send_string = f"{int(linear_RPM)},{int(rotate_RPM)}\n"
@@ -157,7 +186,6 @@ try:
                 ser.write(send_string.encode('utf-8'))
 
         #base map
-
         screen.fill(base_map.COLOR[0])  # Fill the background with the base color
         base_map.draw_grid(screen)
         base_map.draw_Unstd_obs_point(obstacle_history)
