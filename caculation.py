@@ -39,7 +39,7 @@ def error_calculation(car_x, car_y, car_theta, goal_x, goal_y):
         errorAngle = 0;
     else:
         errordistance = math.hypot(dx, dy) / 100;
-        targetAngle = -math.atan2(dy, dx) * 180 / math.pi;
+        targetAngle = math.atan2(dy, dx) * 180 / math.pi;
         errorAngle = targetAngle - car_theta; 
         while (errorAngle > 180.0):  errorAngle -= 360.0;
         while (errorAngle < -180.0):  errorAngle += 360.0;
